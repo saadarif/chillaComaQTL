@@ -133,13 +133,106 @@ system("sed -i 's/scaffold_/s/g' ../../Analysis_in_R/Cold_r75_crossfile6.csv")
 #-------------------------------------------------------------------------------------------------------
 #  Step 3: Playing around in R/Qtl
 
+#Note this assumes the cross file is in the same directory and the working directory is the the one where the script is stored
+#change accordingly
 
-cold6 <- read.cross(format="csv", ".", "../../Analysis_in_R/Cold_r75_crossfile6.csv", genotypes=c("A",  "H", "B"), estimate.map = F, F.gen = 5)
+cold6 <- read.cross(format="csv", ".", "Cold_r75_crossfile6.csv", genotypes=c("A",  "H", "B"), estimate.map = F)
+#I have not specified F.Gen as i will not estimating a genetic map
+#you may want to repeat the analysis with cleaned version below and genetic distances estimated assuming F.gen=5, for comparison
+#you can convert your cross object to F.gen =t with estimated map as follows
+
+#cold6<- convert2bcsft(cold6, F.gen = 5)
+
 summary(cold6)
 #rescale map from kb to mb
 cold6 <- rescalemap(cold6, 1e-6) 
 
-cold6 <- calc.genoprob(cold6, step = 1)   # calculate additional information: QTL genotype probabilities, step = density of the grin (in cM) 
+#----------------------------------------------------------------------------------------------------------------------------
+#Check genotyping quality after filtering
+geno.image(cold6)
+#in an ideal world this should only be contiguous blocks of red,green (homozygous) and some blue (heterozygous)
+
+#We still need to clean this up a bit
+#R/qtl does deal with genotyping error but as should be obvious from the plot above
+#there is still quite a bit of error here.
+
+#We could do two things:
+#(i)get rid of problematic indivdiuals
+#(ii) get get rid od problematic markers in singl individuals.
+
+#In this cleaning approach both filtering methods rely on detecting unexpected double crossover events
+
+#The following is adapted from pages 33-39 from this tutorial
+#http://www.rqtl.org/tutorials/geneticmaps.pdf
+
+#Lets remove problematic individuals first as they will make detecting genotyping errors more tenable later
+
+#Plot the number of double crossovers per individual
+plot(countXO(cold6), ylab="Number of crossovers")
+#most lines have double crossovers betweem 30-150 but ehre are clear outliers. Lets remove these for now
+cold6 <- subset(cold6, ind=(countXO(cold6) < 200))
+#We lose 8 lines
+nind(cold6)
+#Did this qualitatively improve our genotyping?
+geno.image(cold6)
+#I'm not sure if retaining the indvidual with missing data is helpful or not, it is not helpful to have the individual for the nexy
+#step (identifying potential genotyping errors ) so I will remove that individual
+cold6 <- subset(cold6, ind=(ntyped(cold6)>700))
+
+#Now can We identify potentially erroneous double crossovers assumign a genotyping error rate of 1%
+cold6 <- calc.errorlod(cold6, error.prob=0.01)
+
+#We will remove any marker with an abritrary large LOD score, for e.g. greater than 5 (cutoff)
+nrow(toperr <- top.errorlod(cold6, cutoff=5))
+
+#remove markers with LOD scores greater than five and store it as a new cross object
+cold6.clean <-cold6
+for(i in 1:nrow(toperr)) {
+  chr <- toperr$chr[i]
+  id <- toperr$id[i]
+  mar <- toperr$marker[i]
+  cold6.clean$geno[[chr]]$data[id, mar] <- NA
+}
+
+#NOTE: I would recommend looking at the help page for calc.errorlod to find out what is happening and also looking at the function
+#clean.geno() as an alternative/complimentary
+
+summary(cold6)
+summary(cold6.clean)
+#We haven't lost a lot of markers but we have lost 9 indiviuals
+
+#Has the genotyping qualtiatively improved?
+geno.image(cold6.clean)
+
+
+
+#------------------------------------------------------------------------------------------------------------------------------------------
+#YOU COULD IGNORE THE FOLLOWING IF YOU LIKE, it is not directly related to above it is just checking the genetic map
+#estimating the map using the est.map function
+newmap <- est.map(cold6, n.cluster=6)
+plotMap(cold6, newmap, alternate.chrid=T)
+#There seem to be some potentially problematic markers on s13337  (and maybe the terminal one on s13117)
+#Lets calculate pairwise recombination frequency
+#Can we remove the problematic (unlinked markers) on s13337
+#cold6 <- est.rf(cold6)
+#and plot it 
+#plotRF(cold6, alternate.chrid=T) 
+#checkAlleles(cold6)
+#cold6<-drop.markers(cold6, c("19153", "19632"))
+#cold6 <- est.rf(cold6)
+#plotRF(cold6, alternate.chrid=T) 
+#PLEASE STOP IGNORING NOW
+#----------------------------------------------------------------------------------------------------------------------------------------------
+
+#You could not continue with your QTL mapping approach as before but try with the cold6.clean cross
+#Note I've put step to 0 so that it does not estimate any intermarker distances as this does not make much sense
+#if you haven't estimated a genetic map. I would recommend that in additional to the analysis with no estimated genetic map
+#you could do one with a genetic map estimated assuming F.gen=5, you can covert the current cross to F5 and simulatenously estimate the map as follows:
+#cold6.clean.F5<- convert2bcsft(cold6.clean, F.gen = 5)
+#Have a look at the genetic map before proceeding? Does it look reasonable?
+
+
+cold6 <- calc.genoprob(cold6, step = 0)   # calculate additional information: QTL genotype probabilities, step = density of the grin (in cM) 
 result_em_cold6 <- scanone(cold6, pheno.col=1, method= "em")
 result_hk_cold6 <- scanone(cold6, pheno.col=1, method= "hk")
 result_ehk_cold6 <- scanone(cold6, pheno.col=1, method= "ehk")
@@ -181,7 +274,7 @@ lodint(result_em_cold6, chr="s13340")
 
 ######## scantwo
 
-cold6 <- calc.genoprob(cold6, step = 1) 
+cold6 <- calc.genoprob(cold6, step = 0) 
 result_scan2_hk_cold6 <- scantwo(cold6, pheno.col=1, method= "hk", clean.output=TRUE)       
 summary(result_scan2_hk_cold6)
 perm_scan2_hk_cold6<- scantwopermhk(cold6, n.perm = 1000)  # takes a while
@@ -294,5 +387,4 @@ mqm_imp_cold6a_summary <- summary(out.fqa6a)
 # s13337@2.1d:s13340@11.5a -1.5691  3.5239 -0.445
 # s13337@2.1a:s13340@11.5d -2.8247  3.5809 -0.789
 # s13337@2.1d:s13340@11.5d  0.9469  6.0358  0.157
-
 
